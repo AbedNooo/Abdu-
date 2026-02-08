@@ -5,7 +5,7 @@ from scipy.stats import truncnorm
 from scipy.special import expit
 
 # ==============================================================================
-# 1. CONFIGURATION
+# 1. CONFIGURATION & STYLING
 # ==============================================================================
 sns.set_style("whitegrid")
 plt.rcParams.update({'font.size': 12, 'figure.titlesize': 16, 'figure.titleweight': 'bold'})
@@ -23,22 +23,36 @@ def draw_truncated_normal(mu, sigma, lower, upper, size, rng):
 class SolidarityFund:
     def __init__(self, initial_capital, reserve_target=25000.0): 
         self.balance = float(initial_capital)
-        self.Q_outstanding = 20000.0          # Qard Hasan (Debt)
+        self.Q_outstanding = 20000.0          # Qard Hasan (Benevolent Debt)
         self.reserve_target = float(reserve_target)
 
     def process_year(self, subsidies, weather_shocks, expected_losses, current_tau, adoption_mask, trigger=0.70):
-        # 1. INFLOW
+        """
+        Processes fund flows based on Mutual Solidarity principles.
+        
+        NOTE ON PAYOUT LOGIC:
+        This is a 'Parametric Fund', not Indemnity Insurance. 
+        - Trigger: Based on regional weather index (Omega).
+        - Claim: Reimburses a fixed 'Innovation Sunk Cost' (€30/ha), 
+          not the full market value of the crop. This minimizes MRV costs.
+        """
+        
+        # 1. INFLOW (Contributions from Adopters)
         contributions_inflow = np.sum(subsidies[adoption_mask] * float(current_tau))
         self.balance += contributions_inflow
 
-        # 2. OUTFLOW (Pro-Rata Fairness)
-        # Trigger is now based on deviations from Normal (1.0). e.g., < 0.75
+        # 2. OUTFLOW (Parametric Crisis Support)
+        # Trigger based on regional weather index deviation
         triggered_indices = np.where((weather_shocks < trigger) & (adoption_mask))[0]
         payouts = np.zeros(len(subsidies), dtype=float)
         
         if triggered_indices.size > 0:
+            # We treat the claim as a fixed reimbursement of input costs
             total_claimed_loss = np.sum(expected_losses[triggered_indices])
             
+            # SOLVENCY CHECK: Pro-Rata Fairness
+            # If capital is insufficient, we pay 'cents on the euro' to ensure
+            # the fund survives for future years (Mutualist Logic).
             if self.balance >= total_claimed_loss:
                 payouts[triggered_indices] = expected_losses[triggered_indices]
                 self.balance -= total_claimed_loss
@@ -47,28 +61,36 @@ class SolidarityFund:
                 payouts[triggered_indices] = expected_losses[triggered_indices] * coverage_ratio
                 self.balance = 0.0 
 
-        # 3. EARLY REPAYMENT RULE
+        # 3. LIQUIDITY SMOOTHING (Early Repayment Rule)
+        # We pay down debt early, but only using 'Flow' (10% of new money),
+        # not 'Stock' (Balance). This prevents a good year from draining
+        # liquidity and causing a crisis in the next year.
         safety_floor = 15000.0 
         if self.Q_outstanding > 0 and self.balance > safety_floor:
             early_pay = min(0.10 * contributions_inflow, self.Q_outstanding)
             self.Q_outstanding -= early_pay
             self.balance -= early_pay
 
-        # 4. SURPLUS LOGIC (Debt First)
+        # 4. SURPLUS WATERFALL (Strategic Priority)
+        # Hierarchy: 1. Fund Survival (Reserve) -> 2. Lender Repayment (Debt) -> 3. Member Dividend
         surplus = max(0.0, self.balance - self.reserve_target)
         dividend_per_agent = 0.0
 
         if surplus > 0:
+            # PRIORITY A: Clear Qard Hasan Debt
             if self.Q_outstanding > 0:
                 repayment = min(surplus, self.Q_outstanding)
                 self.Q_outstanding -= repayment
                 self.balance -= repayment
                 surplus -= repayment  
 
+            # PRIORITY B: Cooperative Dividend
+            # Distribute ONLY if debt is cleared.
+            # We distribute flat per member (Mutuality Principle), not pro-rata to wealth.
             if self.Q_outstanding <= 1.0 and surplus > 0:
                 num_members = int(np.sum(adoption_mask))
                 if num_members > 0:
-                    distributable = surplus * 0.5 
+                    distributable = surplus * 0.5 # Retain 50% for growth
                     dividend_per_agent = distributable / num_members
                     self.balance -= distributable
 
@@ -77,18 +99,20 @@ class SolidarityFund:
 class Agent:
     def __init__(self, agent_id, params, rng):
         self.id = agent_id
-        # Small Farm Reality
+        # Heterogeneity: Lognormal Farm Size (Puglia structural data)
         raw_area = rng.lognormal(mean=1.42, sigma=0.5)
         self.Area = float(np.clip(raw_area, 0.5, 50.0))
 
-        # Liquidity Trap
+        # Initial State: Liquidity Constrained
         self.W = float(rng.uniform(300, 600) * self.Area) 
         
-        # Subsidy: Conditional Eco-Scheme Payment
+        # POLICY DEFINITION:
+        # This represents the Conditional Eco-Scheme Payment (e.g., SRA24).
+        # It is distinct from Basic Income Support (BISS), which is assumed
+        # to cover household subsistence and is not modeled here.
         self.subsidy_amt = float(174.0 * self.Area)  
         
-        # Recalibrated Yield Potential:
-        # Since avg Omega is now 1.0 (was 0.7), we lower Y_max to keep revenue realistic.
+        # Yield Potential (Calibrated for Omega Mean = 1.0)
         self.Y_max = float(4000.0 * self.Area)       
         
         self.rho = float(params['rho'])     
@@ -102,7 +126,6 @@ class Agent:
         self.c_n = 0.80; self.chi = 0.005
         self.a0 = 15.0; self.c_op = 10.0; self.c_comm = 5.0; self.c_ha = 5.0
 
-        # History
         self.nue_history = []
         self.target_history = []
 
@@ -118,9 +141,10 @@ def run_single_simulation(seed, use_fund=True):
     t_max = 15
 
     # --- CALIBRATION ---
-    beta1 = 0.015  # Money
+    beta1 = 0.015  # Economic Sensitivity
     
-    # Institutional Cohesion (Peer Effect)
+    # Institutional Cohesion Effect
+    # Hypothesis: The Fund acts as a social scaffold, increasing peer influence by 35%.
     beta2_base = 2.0  
     cohesion_k = 0.35 
     if use_fund:
@@ -128,18 +152,17 @@ def run_single_simulation(seed, use_fund=True):
     else:
         beta2 = beta2_base                      
     
-    beta3 = -2.5   # Fear
+    beta3 = -2.5   # Risk Perception
 
-    # --- WEATHER RE-CALIBRATION ---
-    # Normal Year = 1.0 (100% Potential).
-    # Drought < 0.75.
-    # This allows Target = 0.60 * Omega to yield ~60% average.
+    # --- WEATHER MODEL ---
+    # We model a single regional shock (Systemic Risk) with local variations.
+    # Mean = 1.0 (Normal Year).
     omega_mu = 1.0
     omega_sigma = 0.15
     omega_lower = 0.50  # Severe Drought
     omega_upper = 1.30  # Bumper Crop
     
-    # Trigger Payout if yield drops below 75% of potential (25% loss)
+    # Trigger: Parametric index below 75% of normal potential
     trigger_omega = 0.75 
 
     agents = []
@@ -158,10 +181,8 @@ def run_single_simulation(seed, use_fund=True):
     nue_series = []
 
     for t in range(t_max):
-        # --- FIX 2: SYSTEMIC REGIONAL WEATHER ---
-        # One main shock for the region
+        # 1. Weather Realization (Systemic + Local)
         omega_t = draw_truncated_normal(mu=omega_mu, sigma=omega_sigma, lower=omega_lower, upper=omega_upper, size=1, rng=rng)[0]
-        # Small local variations (micro-climates)
         omega = np.clip(omega_t + rng.normal(0.0, 0.05, n_agents), omega_lower, omega_upper)
         
         current_tau = 0.25 if t < 3 else 0.15
@@ -170,9 +191,11 @@ def run_single_simulation(seed, use_fund=True):
         subsidies = np.array([a.subsidy_amt for a in agents])
         adoption_mask = np.array([a.adopted == 1 for a in agents], dtype=bool)
         areas = np.array([a.Area for a in agents])
+        
+        # Expected 'Innovation' Loss (Fixed €30/ha cost coverage)
         exp_losses = 30.0 * areas 
         
-        # Fund Processing
+        # 2. Fund Logic
         if use_fund:
             payouts, dividend = fund.process_year(subsidies, omega, exp_losses, current_tau, adoption_mask, trigger_omega)
         else:
@@ -182,18 +205,17 @@ def run_single_simulation(seed, use_fund=True):
         sys_nue_num = 0.0; sys_nue_den = 0.0
 
         for i, ag in enumerate(agents):
-            # Agronomy
+            # 3. Agronomy (Mitscherlich Function)
             N_applied = ag.N_curr
             Y_total = ag.Y_max * (1.0 - np.exp(-ag.a * N_applied)) * omega[i]
             N_uptake = 0.018 * Y_total
             
-            # Conditionality
+            # 4. Conditionality (Target Definition)
             true_nue = (N_uptake / (N_applied * ag.Area)) if N_applied > 0 else 0.0
             obs_nue = np.clip(true_nue + rng.normal(0.0, 0.03), 0.0, 1.0)
             
-            # --- FIX 1: THESIS-CONSISTENT TARGET ---
-            # Target is 60% of Realized Potential.
-            # Since avg Omega ~ 1.0, avg Target ~ 0.60 (60%).
+            # Policy Target: 60% Efficiency adjusted for Weather Potential
+            # Formula: Target = 0.60 * Omega (Mean 1.0)
             target_val = 0.60 * omega[i]
 
             ag.nue_history.append(obs_nue)
@@ -201,19 +223,22 @@ def run_single_simulation(seed, use_fund=True):
             if len(ag.nue_history) > 3: ag.nue_history.pop(0)
             if len(ag.target_history) > 3: ag.target_history.pop(0)
 
+            # Clawback Logic (Individual Learning Period)
             clawback = 0.0
-            # Grace Period (2 years from INDIVIDUAL adoption)
             if ag.adopted and ag.t_adopt != -1 and (t - ag.t_adopt) >= 2:
                 avg_perf = float(np.mean(ag.nue_history))
                 avg_target = float(np.mean(ag.target_history))
                 if avg_perf < avg_target:
                     shortfall = avg_target - avg_perf
-                    # Cap Fix: Limited by Subsidy amount
+                    # Penalty capped at Subsidy Amount (cannot confiscate wealth)
                     clawback = min(shortfall * 3.0 * ag.subsidy_amt, ag.subsidy_amt)
 
-            # Economics
+            # 5. Economics (Survival Check)
             cost_N = ((ag.c_n * N_applied) + (0.5 * ag.chi * (N_applied**2))) * ag.Area
+            
+            # 'Survival Cost': Seeds, Labor, Diesel (~€600/ha)
             residual_ops_cost = 600.0 * ag.Area
+            
             cost_mrv_actual = ag.calculate_mrv_cost() if ag.adopted else 0.0
             revenue = 0.35 * Y_total 
             
@@ -224,20 +249,23 @@ def run_single_simulation(seed, use_fund=True):
 
             profit = (revenue - cost_N - residual_ops_cost) + net_subsidy_cash + payouts[i] + (dividend if (ag.adopted and use_fund) else 0)
             
-            # Wealth Update
+            # Wealth Update (Savings Rate = 20%)
             if profit > 0: ag.W += profit * 0.20 
             else: ag.W += profit 
 
-            # ADOPTION LOGIC
+            # 6. Adoption Decision (Logit)
             potential_mrv_total = ag.calculate_mrv_cost()
             potential_mrv_per_ha = potential_mrv_total / ag.Area
             
+            # Constraint 1: Feasibility (Liquidity Trap)
             upfront_cost = 80.0 + (potential_mrv_total * 0.5)
             feasibility = 1.0 if ag.W >= upfront_cost else 0.0
 
+            # Constraint 2: Utility (Net Incentive)
             exp_contrib_per_ha = (current_tau * 174.0) if use_fund else 0.0
             net_incentive_per_ha = 174.0 - exp_contrib_per_ha - potential_mrv_per_ha
             
+            # Social Trust Multiplier
             trust_mult = 1.0 
             coverage_ratio = ag.W / (upfront_cost + 1.0)
             trust_mult = 1.0 + (1.5 - np.clip(coverage_ratio, 0.5, 2.5)) * 0.2
@@ -252,7 +280,7 @@ def run_single_simulation(seed, use_fund=True):
                 ag.adopted = 1
                 ag.t_adopt = t 
 
-            # Learning
+            # Learning Dynamics
             target_N = 105.0 if ag.adopted else 150.0
             ag.N_curr = (1.0 - 0.40) * ag.N_curr + 0.40 * target_N
 
